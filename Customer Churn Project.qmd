@@ -4,12 +4,256 @@ format: html
 editor: visual
 ---
 
-## Customer Churn
+# Customer Churn
 
 **Riley Walburger**
 
 **10/06/2025**
 
+## Business Problem
+
+## Leakage Problem
+
+## Setup
+
+```{r}
+library(readr)
+library(rpart)
+library(rpart.plot)
+library(dplyr)
+```
+
+## Load Data
+
+```{r}
+
+churn_train <- read_csv("churn_train.csv")
+head(churn_train)
+```
+
+```{r}
+churn_data_dictionary <- read_csv("churn_data_dictionary.csv")
+View(churn_data_dictionary)
+```
+
+## Features
+
+```{r}
+# Step 2: Convert selected columns to factors
+factor_cols <- c(
+  "gender", "SeniorCitizen", "Partner", "Dependents",
+  "PhoneService", "MultipleLines", "InternetService",
+  "OnlineSecurity", "OnlineBackup", "DeviceProtection",
+  "TechSupport", "StreamingTV", "StreamingMovies",
+  "Contract", "PaperlessBilling", "PaymentMethod", "Churn"
+)
+
+churn_train[factor_cols] <- lapply(churn_train[factor_cols], as.factor)
+```
+
+```{r}
+# Loop through all factor variables in churn_train
+for (col in names(churn_train)) {
+  if (is.factor(churn_train[[col]])) {
+    cat("\n-----------------------------\n")
+    cat("Variable:", col, "\n")
+    print(round(prop.table(table(churn_train[[col]])) * 100, 2))
+  }
+}
+```
+
+```{r}
+churn_train_1 <- churn_train %>%
+  select(-ID)
+```
+
+```{r}
+# Replace NA in TotalCharges with 0
+churn_train_1$TotalCharges[is.na(churn_train_1$TotalCharges)] <- 0
+```
+
+```{r}
+
+# Build a basic classification tree
+tree_model_deep <- rpart(
+  Churn ~ .,
+  data = churn_train_1,
+  method = "class",
+  control = rpart.control(
+    cp = 0.001,        # lower = deeper tree (try 0.001 to 0.0001)
+    minsplit = 3,     # minimum number of observations needed to attempt a split
+    minbucket = 3,     # minimum number of observations in a terminal node
+    maxdepth = 5      # maximum depth of the tree (increase if you want more levels)
+  )
+)
+
+# Plot the tree
+rpart.plot(tree_model_deep, type = 2, extra = 104, fallen.leaves = TRUE)
+```
+
+Some top pieces that can tell us information into the churn column are:
+
+-   If they have a contract
+
+-   If they have Internet Service
+
+-   The length of time in their tenure
+
+-   If they have the Tech Support Addon
+
+-   Their Payment Method
+
+-   Total Charges
+
+### Tenure
+
+```{r}
+library(ggplot2)
+
+# Boxplot of tenure by Churn
+ggplot(churn_train_1, aes(x = Churn, y = tenure, fill = Churn)) +
+  geom_boxplot() +
+  labs(title = "Customer Tenure by Churn",
+       x = "Churn",
+       y = "Tenure (months)") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1")
+
+```
+
+People with Lower Tenure or have been with the company less amount of time are more likely to churn.
+
+### Gender
+
+```{r}
+prop.table(table(churn_train_1$gender, churn_train_1$Churn), margin = 1)
+
+
+```
+
+Gender has nearly no prediction power by itself as it is evenly split.
+
+### Dependents
+
+```{r}
+prop.table(table(churn_train_1$Dependents, churn_train_1$Churn), margin = 1)
+
+```
+
+Dependents does seem to have a bit more predictive power. In fact when they do have dependents it seems like they are more likely to churn.
+
+```{r}
+
+ggplot(churn_train_1, aes(x = Churn, y = TotalCharges, fill = Churn)) +
+  geom_violin(trim = FALSE, alpha = 0.7) +   # violin shape
+  geom_boxplot(width = 0.1, fill = "white", outlier.shape = NA) +  # optional: boxplot inside
+  labs(
+    title = "Distribution of Total Charges by Churn",
+    x = "Churn",
+    y = "Total Charges"
+  ) +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1")
+```
+
+## Baseline Model
+
+## Random Forest
+
+```{r}
+library(randomForest)
+library(caret)
+library(dplyr)
+
+set.seed(123)  # for reproducibility
+
+# 5-fold cross-validation
+train_control <- trainControl(
+  method = "cv",
+  number = 5,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary  # for AUC, ROC etc.
+)
+```
+
+```{r}
+# Train the model
+rf_model <- train(
+  Churn ~ .,
+  data = churn_train_1,
+  method = "rf",
+  trControl = train_control,
+  metric = "ROC",  # optimize by AUC
+  importance = TRUE
+)
+```
+
+```{r}
+# Print model results
+print(rf_model)
+
+# Variable importance
+varImp(rf_model)$importance
+```
+
+\
+
+```{r}
+# Get variable importance
+importance_df <- varImp(rf_model)$importance
+
+# Convert to a data frame and sort descending
+importance_df <- importance_df %>%
+  tibble::rownames_to_column(var = "Variable") %>%
+  arrange(desc(No))
+
+importance_df
+
+```
+
+```{r}
+# Get resampled predictions
+resampled_preds <- rf_model$resample
+head(resampled_preds)
+
+```
+
+```{r}
+mean_accuracy <- mean(resampled_preds$Accuracy)
+mean_kappa <- mean(resampled_preds$Kappa)
+mean_sensitivity <- mean(resampled_preds$Sens)  # recall
+mean_specificity <- mean(resampled_preds$Spec)
+
+```
+
+```{r}
+# Approximate precision from Sensitivity (recall) and Specificity (not exact)
+# Better: use confusion matrices from each fold
+
+# For overall F1, you can get predictions on full training set using predict:
+pred <- predict(rf_model, newdata = churn_train_1)
+conf_mat <- confusionMatrix(pred, churn_train_1$Churn, positive = "Yes")
+
+precision <- conf_mat$byClass["Pos Pred Value"]
+recall <- conf_mat$byClass["Sensitivity"]
+f1 <- 2 * (precision * recall) / (precision + recall)
+
+precision
+recall
+f1
+
+```
+
+## Decision Rule and Cost
+
+## Saving Files
+
+## Holdout Scoring
+
 ```{r}
 
 ```
+
+## Recommendations
+
+## Appendix
