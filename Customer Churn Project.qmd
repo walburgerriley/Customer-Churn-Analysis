@@ -1,0 +1,15 @@
+---
+title: "Cusstomer Churn Project"
+format: html
+editor: visual
+---
+
+## Customer Churn
+
+**Riley Walburger**
+
+**10/06/2025**
+
+```{r}
+
+```
